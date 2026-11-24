@@ -108,7 +108,7 @@ async function isQdrantReachable(client: QdrantClient): Promise<boolean> {
 
 describe("live Qdrant + Mem0 OSS 3.3.1 integration", () => {
   const collectionName = `mem0_decay_it_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  const qdrantClient = new QdrantClient({ url: QDRANT_URL });
+  const qdrantClient = new QdrantClient({ url: QDRANT_URL, checkCompatibility: false });
   let qdrantAvailable = false;
   let embedderServer: Server | undefined;
   let memory: Memory;

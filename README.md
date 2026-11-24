@@ -3,7 +3,7 @@
 Time-aware ranking and scoped lifecycle management wrapper for **Mem0 OSS** and **Qdrant**.
 
 - **Tested Mem0 OSS compatibility target:** `mem0ai@3.3.1`
-- **Vector store target:** Qdrant (`@qdrant/js-client-rest`)
+- **Vector store target:** Qdrant (`@qdrant/js-client-rest` `>=1.13.0 <1.19.0`; `1.18.x` tested with `mem0ai@3.3.1` because `@qdrant/js-client-rest@1.19.0` removed `QdrantClient.search()`)
 - **Zero runtime dependencies** in the core library; curve helpers (`mem0-decay/curves`) work standalone without initializing Mem0 or Qdrant.
 
 ## Scripts
