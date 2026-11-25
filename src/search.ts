@@ -8,6 +8,7 @@ import {
   type AccessKey,
   type AccessSidecarConfig,
   type Clock,
+  type DecayPolicyDefinition,
   type DecaySearchItem,
   type DecaySearchOptions,
   type DecaySearchResult,
@@ -18,6 +19,13 @@ import {
   type SearchFilters,
   type TenantBinding,
 } from "./contracts.js";
+import {
+  decayCurves,
+  resolveDecayCurve,
+  type CurveRegistry,
+  type DecayCurve,
+  type DecayCurveInput,
+} from "./curves.js";
 import {
   DECAY_METADATA_KEYS,
   assertNoReservedMetadataKeys,
@@ -32,6 +40,7 @@ export const DEFAULT_TOP_K = 10;
 export const DEFAULT_OVERFETCH_FACTOR = 4;
 export const DEFAULT_MAX_CANDIDATES = 200;
 export const DEFAULT_QUERY_HALF_LIFE_DAYS = 14;
+export const DEFAULT_ALPHA = 0.05;
 
 export interface SearchEngineConfig {
   storeId: string;
@@ -44,6 +53,9 @@ export interface SearchEngineConfig {
   overfetchFactor: number;
   maxCandidates: number;
   defaultQueryHalfLifeDays: number;
+  defaultQueryCurve?: DecayCurveInput;
+  curveRegistry?: CurveRegistry;
+  alpha?: number;
   accessSidecar?: AccessSidecarConfig;
 }
 
@@ -113,11 +125,35 @@ function intervalDistanceMs(
   return 0;
 }
 
-function validateHalfLife(halfLifeDays: number): number {
-  if (typeof halfLifeDays !== "number" || !Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
-    throw new RangeError(`Query halfLifeDays must be a finite number > 0, received: ${String(halfLifeDays)}`);
+export function validateAlpha(alpha: number, label = "alpha"): number {
+  if (typeof alpha !== "number" || !Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+    throw new RangeError(`${label} must be a finite number in [0, 1], received: ${String(alpha)}`);
   }
-  return halfLifeDays;
+  return alpha;
+}
+
+function computeRecencyTimeWeight(input: {
+  policy: DecayPolicyDefinition;
+  rawAgeDays: number;
+  referenceNowMs: number;
+  usage: { lastUsedAt: number; accessCount: number } | undefined;
+  maxAgeReductionDays?: number;
+  curveOverride?: DecayCurve;
+}): number {
+  const { policy, rawAgeDays, referenceNowMs, usage, maxAgeReductionDays, curveOverride } = input;
+  if (policy.fullRecencyWeight) {
+    return 1;
+  }
+  const effectiveAgeDays = computeEffectiveAgeDays({
+    rawAgeDays,
+    referenceNowMs,
+    usage,
+    maxAgeReductionDays,
+  });
+  if (curveOverride) {
+    return curveOverride.withFloor(policy.floor).evaluate(effectiveAgeDays);
+  }
+  return policy.weightedCurve.evaluate(effectiveAgeDays);
 }
 
 function compareRankedItems(a: DecaySearchItem, b: DecaySearchItem): number {
@@ -159,6 +195,8 @@ export async function executeDecaySearch(
     );
   }
 
+  const alpha = validateAlpha(options.alpha ?? config.alpha ?? DEFAULT_ALPHA);
+
   const referenceNowMs =
     options.referenceNowMs !== undefined ? options.referenceNowMs : config.nowMs();
   if (!Number.isFinite(referenceNowMs)) {
@@ -167,31 +205,54 @@ export async function executeDecaySearch(
 
   const filters = buildMem0ScopeFilters(scope, config.tenantBinding, options.filters);
 
+  const defaultQueryCurve: DecayCurve =
+    config.defaultQueryCurve !== undefined
+      ? resolveDecayCurve(config.defaultQueryCurve, config.curveRegistry)
+      : decayCurves.exponential(config.defaultQueryHalfLifeDays);
+
+  const searchCurveOverride: DecayCurve | undefined =
+    options.curve !== undefined
+      ? resolveDecayCurve(options.curve, config.curveRegistry)
+      : undefined;
+
   let mode: DecaySearchResult["mode"] = "recency";
   let rangeBounds: { fromMs: number; toMs: number } | undefined;
   let anchorSpan: { start: number; end: number } | undefined;
-  let queryHalfLifeDays = config.defaultQueryHalfLifeDays;
+  let queryCurve: DecayCurve = searchCurveOverride ?? defaultQueryCurve;
 
   if (options.range) {
+    if (options.range.curve !== undefined && options.range.halfLifeDays !== undefined) {
+      throw new RangeError("Provide either range.curve or range.halfLifeDays, not both");
+    }
     const tz = options.range.timeZone ?? config.defaultTimeZone;
     rangeBounds = normalizeDateRange(options.range.from, options.range.to, tz);
     const strict = options.range.strict !== false;
     mode = strict ? "strict_range" : "soft_range";
     if (!strict) {
-      queryHalfLifeDays = validateHalfLife(
-        options.range.halfLifeDays ?? config.defaultQueryHalfLifeDays,
-      );
+      if (options.range.curve !== undefined) {
+        queryCurve = resolveDecayCurve(options.range.curve, config.curveRegistry);
+      } else if (options.range.halfLifeDays !== undefined) {
+        queryCurve = decayCurves.exponential(options.range.halfLifeDays);
+      }
     } else {
+      if (options.range.curve !== undefined) {
+        resolveDecayCurve(options.range.curve, config.curveRegistry);
+      }
       filters[DECAY_METADATA_KEYS.timeStart] = { gte: rangeBounds.fromMs };
       filters[DECAY_METADATA_KEYS.timeEnd] = { lt: rangeBounds.toMs };
     }
   } else if (options.anchor) {
+    if (options.anchor.curve !== undefined && options.anchor.halfLifeDays !== undefined) {
+      throw new RangeError("Provide either anchor.curve or anchor.halfLifeDays, not both");
+    }
     const tz = options.anchor.timeZone ?? config.defaultTimeZone;
     anchorSpan = normalizeAnchorSpan(options.anchor.around, tz);
     mode = "anchor";
-    queryHalfLifeDays = validateHalfLife(
-      options.anchor.halfLifeDays ?? config.defaultQueryHalfLifeDays,
-    );
+    if (options.anchor.curve !== undefined) {
+      queryCurve = resolveDecayCurve(options.anchor.curve, config.curveRegistry);
+    } else if (options.anchor.halfLifeDays !== undefined) {
+      queryCurve = decayCurves.exponential(options.anchor.halfLifeDays);
+    }
   }
 
   const fetchLimit =
@@ -276,12 +337,7 @@ export async function executeDecaySearch(
         rangeBounds.fromMs,
         rangeBounds.toMs,
       );
-      if (distMs === 0) {
-        timeWeight = 1;
-      } else {
-        const distDays = distMs / MS_PER_DAY;
-        timeWeight = Math.pow(0.5, distDays / queryHalfLifeDays);
-      }
+      timeWeight = distMs === 0 ? 1 : queryCurve.evaluate(distMs / MS_PER_DAY);
     } else if (mode === "anchor" && anchorSpan) {
       if (!managed) {
         continue;
@@ -292,12 +348,7 @@ export async function executeDecaySearch(
         anchorSpan.start,
         anchorSpan.end,
       );
-      if (distMs === 0) {
-        timeWeight = 1;
-      } else {
-        const distDays = distMs / MS_PER_DAY;
-        timeWeight = Math.pow(0.5, distDays / queryHalfLifeDays);
-      }
+      timeWeight = distMs === 0 ? 1 : queryCurve.evaluate(distMs / MS_PER_DAY);
     } else {
       // No-date recency mode
       const usageKey = serializeAccessKey({
@@ -308,42 +359,33 @@ export async function executeDecaySearch(
       const usage = usageMap.get(usageKey);
 
       if (managed) {
-        if (!policy) {
-          timeWeight = 1;
-        } else if (policy.fullRecencyWeight) {
-          timeWeight = 1;
-        } else {
-          const rawAgeDays = Math.max(0, (referenceNowMs - managed.decay_time_end) / MS_PER_DAY);
-          const effectiveAgeDays = computeEffectiveAgeDays({
-            rawAgeDays,
-            referenceNowMs,
-            usage,
-            maxAgeReductionDays: config.accessSidecar?.maxAgeReductionDays,
-          });
-          const { strength } = policy.criterion(effectiveAgeDays);
-          timeWeight = policy.floor + (1 - policy.floor) * strength;
-        }
+        timeWeight = policy
+          ? computeRecencyTimeWeight({
+              policy,
+              rawAgeDays: Math.max(0, (referenceNowMs - managed.decay_time_end) / MS_PER_DAY),
+              referenceNowMs,
+              usage,
+              maxAgeReductionDays: config.accessSidecar?.maxAgeReductionDays,
+              curveOverride: searchCurveOverride,
+            })
+          : 1;
       } else {
         const legacyTs = extractLegacyCreatedAtMs(item.createdAt, metadata);
-        if (legacyTs === null) {
-          timeWeight = 1;
-        } else if (defaultPolicy.fullRecencyWeight) {
-          timeWeight = 1;
-        } else {
-          const rawAgeDays = Math.max(0, (referenceNowMs - legacyTs) / MS_PER_DAY);
-          const effectiveAgeDays = computeEffectiveAgeDays({
-            rawAgeDays,
-            referenceNowMs,
-            usage,
-            maxAgeReductionDays: config.accessSidecar?.maxAgeReductionDays,
-          });
-          const { strength } = defaultPolicy.criterion(effectiveAgeDays);
-          timeWeight = defaultPolicy.floor + (1 - defaultPolicy.floor) * strength;
-        }
+        timeWeight =
+          legacyTs === null
+            ? 1
+            : computeRecencyTimeWeight({
+                policy: defaultPolicy,
+                rawAgeDays: Math.max(0, (referenceNowMs - legacyTs) / MS_PER_DAY),
+                referenceNowMs,
+                usage,
+                maxAgeReductionDays: config.accessSidecar?.maxAgeReductionDays,
+                curveOverride: searchCurveOverride,
+              });
       }
     }
 
-    const adjustedScore = baseScore * timeWeight;
+    const adjustedScore = baseScore - baseScore * (1 - timeWeight) * alpha;
 
     ranked.push({
       id: item.id,

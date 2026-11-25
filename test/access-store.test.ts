@@ -78,13 +78,14 @@ describe("optional access sidecar", () => {
     });
 
     const ageOnly = await wrapperAgeOnly.search("note", { scope: SCOPE, topK: 5 });
-    expect(ageOnly.results[0]!.adjustedScore).toBeCloseTo(0.52, 12);
+    expect(ageOnly.results[0]!.adjustedScore).toBeCloseTo(0.786, 12);
 
     // Record confirmed use today -> reduces effective age from 30 days to 20 days (capped at 10 days)
     await wrapperReinforced.recordUse(SCOPE, "m-old", "use-1", NOW);
     const boosted = await wrapperReinforced.search("note", { scope: SCOPE, topK: 5 });
     const expectedStrength = Math.pow(0.5, 20 / 30);
-    const expectedScore = 0.8 * (0.3 + 0.7 * expectedStrength);
+    const expectedTimeWeight = 0.3 + 0.7 * expectedStrength;
+    const expectedScore = 0.8 - 0.8 * (1 - expectedTimeWeight) * 0.05;
     expect(boosted.results[0]!.adjustedScore).toBeCloseTo(expectedScore, 12);
     expect(boosted.results[0]!.adjustedScore).toBeGreaterThan(ageOnly.results[0]!.adjustedScore);
 

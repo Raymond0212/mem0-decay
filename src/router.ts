@@ -14,7 +14,12 @@ import {
   type SweepReport,
   type WriteCoordinator,
 } from "./contracts.js";
-import { DEFAULT_TOP_K } from "./search.js";
+import {
+  resolveDecayCurve,
+  type CurveRegistry,
+  type DecayCurveInput,
+} from "./curves.js";
+import { DEFAULT_TOP_K, validateAlpha } from "./search.js";
 
 export interface InProcessWriteCoordinatorOptions {
   /**
@@ -77,6 +82,12 @@ export interface DecayRouterConfig {
   writeCoordinator?: WriteCoordinator;
   authorize?: ScopeAuthorizer;
   accessStore?: AccessStore;
+  /** Optional router-wide default `alpha` in [0, 1] when per-query `alpha` is not specified. */
+  alpha?: number;
+  /** Optional router-wide default decay curve for soft-range and anchor distance queries. */
+  defaultQueryCurve?: DecayCurveInput;
+  /** Optional custom `CurveRegistry` for resolving `{ kind }` curve specs passed to router search. */
+  curveRegistry?: CurveRegistry;
 }
 
 export interface RouterSearchOptions extends DecaySearchOptions {
@@ -142,6 +153,12 @@ export function createDecayRouter(config: DecayRouterConfig = {}): DecayRouter {
   const writeCoordinator =
     config.writeCoordinator ?? createInProcessWriteCoordinator({ serializeAllStores: true });
   const authorize: ScopeAuthorizer = config.authorize ?? (() => true);
+  const routerAlpha =
+    config.alpha !== undefined ? validateAlpha(config.alpha, "config.alpha") : undefined;
+  const routerDefaultQueryCurve =
+    config.defaultQueryCurve !== undefined
+      ? resolveDecayCurve(config.defaultQueryCurve, config.curveRegistry)
+      : undefined;
 
   const stores = new Map<string, DecayMemory>();
   let activeWriteStoreId: string | null = null;
@@ -208,6 +225,40 @@ export function createDecayRouter(config: DecayRouterConfig = {}): DecayRouter {
 
     async search(query: string, options: RouterSearchOptions): Promise<DecaySearchResult> {
       const scope = assertValidScope(options.scope);
+      const effectiveAlpha =
+        options.alpha !== undefined ? validateAlpha(options.alpha) : routerAlpha;
+      const resolveQueryCurve = (input: DecayCurveInput): DecayCurveInput =>
+        config.curveRegistry ? resolveDecayCurve(input, config.curveRegistry) : input;
+
+      const resolvedTopCurve =
+        options.curve !== undefined ? resolveQueryCurve(options.curve) : undefined;
+      const resolvedRange =
+        options.range !== undefined
+          ? {
+              ...options.range,
+              ...(options.range.curve !== undefined
+                ? { curve: resolveQueryCurve(options.range.curve) }
+                : options.range.strict === false &&
+                    options.range.halfLifeDays === undefined &&
+                    resolvedTopCurve === undefined &&
+                    routerDefaultQueryCurve !== undefined
+                  ? { curve: routerDefaultQueryCurve }
+                  : {}),
+            }
+          : undefined;
+      const resolvedAnchor =
+        options.anchor !== undefined
+          ? {
+              ...options.anchor,
+              ...(options.anchor.curve !== undefined
+                ? { curve: resolveQueryCurve(options.anchor.curve) }
+                : options.anchor.halfLifeDays === undefined &&
+                    resolvedTopCurve === undefined &&
+                    routerDefaultQueryCurve !== undefined
+                  ? { curve: routerDefaultQueryCurve }
+                  : {}),
+            }
+          : undefined;
       const referenceNowMs = options.referenceNowMs ?? nowMs();
       const topK = options.topK ?? DEFAULT_TOP_K;
 
@@ -252,6 +303,10 @@ export function createDecayRouter(config: DecayRouterConfig = {}): DecayRouter {
             scope,
             topK,
             referenceNowMs,
+            ...(effectiveAlpha !== undefined ? { alpha: effectiveAlpha } : {}),
+            ...(resolvedTopCurve !== undefined ? { curve: resolvedTopCurve } : {}),
+            ...(resolvedRange !== undefined ? { range: resolvedRange } : {}),
+            ...(resolvedAnchor !== undefined ? { anchor: resolvedAnchor } : {}),
           }),
         ),
       );

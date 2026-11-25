@@ -1,17 +1,39 @@
 export {
   DEFAULT_HALF_LIFE_DAYS,
   DEFAULT_MIN_STRENGTH,
+  DEFAULT_SIGMOID_ASYMMETRY,
+  DEFAULT_SIGMOID_LOWER,
+  DEFAULT_SIGMOID_MIDPOINT_DAYS,
+  DEFAULT_SIGMOID_SLOPE,
+  DEFAULT_SIGMOID_UPPER,
   assertValidAgeDays,
   assertValidStrength,
+  createCallableCurve,
+  createCurveRegistry,
   createDecayCriterion,
   decayCurves,
+  defaultCurveRegistry,
   evaluateDecay,
+  isDecayCriterion,
+  isDecayCurve,
+  resolveDecayCurve,
+  type ConstantCurveOptions,
+  type ConstantCurveParams,
+  type CurveFactory,
+  type CurveRegistry,
   type DecayCriterion,
   type DecayCriterionOptions,
   type DecayCurve,
+  type DecayCurveFn,
+  type DecayCurveInput,
+  type DecayCurveSpec,
+  type DecayCurveStrategy,
   type DecayEvaluation,
   type ExponentialCurveOptions,
+  type ExponentialCurveParams,
+  type FlooredCurveParams,
   type SigmoidCurveOptions,
+  type SigmoidCurveParams,
 } from "./curves.js";
 
 export {
@@ -107,6 +129,7 @@ export {
 export { createDecayMemory } from "./memory.js";
 
 export {
+  DEFAULT_ALPHA,
   DEFAULT_MAX_CANDIDATES,
   DEFAULT_OVERFETCH_FACTOR,
   DEFAULT_QUERY_HALF_LIFE_DAYS,
@@ -114,6 +137,7 @@ export {
   assertScopeMatchesTenantBinding,
   buildMem0ScopeFilters,
   executeDecaySearch,
+  validateAlpha,
   type SearchEngineConfig,
 } from "./search.js";
 

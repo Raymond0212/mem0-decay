@@ -37,7 +37,7 @@ describe("host router and single-writer coordinator", () => {
     fakeB.seed({
       id: "b-fresh",
       memory: "Store B fresh hit",
-      baseScore: 0.7,
+      baseScore: 0.84,
       payload: {
         user_id: "alice",
         [DECAY_METADATA_KEYS.tenant]: "acme",
@@ -82,8 +82,16 @@ describe("host router and single-writer coordinator", () => {
     const res = await router.search("hit", { scope: SCOPE, topK: 2 });
     expect(res.referenceNowMs).toBe(NOW);
     expect(res.results.map((r) => [r.storeId, r.id])).toEqual([
-      ["store-b", "b-fresh"], // 0.70
-      ["store-a", "a-old"], // 0.85 * 0.65 = 0.5525
+      ["store-b", "b-fresh"], // 0.84
+      ["store-a", "a-old"], // 0.85 - 0.85 * (1 - 0.65) * 0.05 = 0.835125
+    ]);
+    expect(res.results[1]!.adjustedScore).toBeCloseTo(0.835125, 12);
+
+    // Adjustable alpha forwarded across router fan-out
+    const unpenalized = await router.search("hit", { scope: SCOPE, topK: 2, alpha: 0 });
+    expect(unpenalized.results.map((r) => [r.storeId, r.id])).toEqual([
+      ["store-a", "a-old"], // 0.85
+      ["store-b", "b-fresh"], // 0.84
     ]);
 
     await expect(

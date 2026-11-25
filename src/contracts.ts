@@ -1,5 +1,5 @@
 import type { AddMemoryOptions, Memory, MemoryItem, Message, SearchFilters, SearchMemoryOptions, SearchResult } from "mem0ai/oss";
-import type { DecayCriterion, DecayCurve } from "./curves.js";
+import type { CurveRegistry, DecayCriterion, DecayCurve, DecayCurveInput } from "./curves.js";
 
 export type { AddMemoryOptions, MemoryItem, Message, SearchFilters, SearchMemoryOptions, SearchResult };
 
@@ -43,6 +43,8 @@ export interface DecayPolicyDefinition {
   floor: number;
   /** Decay curve returning raw strength in [0, 1]. */
   curve: DecayCurve;
+  /** Ranking curve decorated with `floor` (or constant `1` when `fullRecencyWeight` is true). */
+  weightedCurve: DecayCurve;
   /** Callable criterion returning raw strength and strict `< minStrength` threshold status. */
   criterion: DecayCriterion;
   /** Raw strength threshold for sweep eligibility. */
@@ -109,16 +111,20 @@ export interface RangeQuery {
   to: DateInput;
   /** Defaults to true (strict pre-filtered [from, to) window). */
   strict?: boolean;
-  /** Half-life in days for soft range fade outside the window. */
+  /** Half-life in days for soft range fade outside the window (mutually exclusive with `curve`). */
   halfLifeDays?: number;
+  /** Reusable decay curve for soft range fade outside the window (mutually exclusive with `halfLifeDays`). */
+  curve?: DecayCurveInput;
   /** Timezone for date-only (YYYY-MM-DD) inputs. Defaults to store/UTC. */
   timeZone?: string;
 }
 
 export interface AnchorQuery {
   around: DateInput;
-  /** Half-life in days for symmetric fade from the anchor. */
+  /** Half-life in days for symmetric fade from the anchor (mutually exclusive with `curve`). */
   halfLifeDays?: number;
+  /** Reusable decay curve for symmetric fade from the anchor (mutually exclusive with `halfLifeDays`). */
+  curve?: DecayCurveInput;
   /** Timezone for date-only (YYYY-MM-DD) inputs. Defaults to store/UTC. */
   timeZone?: string;
 }
@@ -126,6 +132,10 @@ export interface AnchorQuery {
 export interface DecaySearchOptions {
   scope: ResolvedScope;
   topK?: number;
+  /** Decay penalty weight in [0, 1] for `adjustedScore = baseScore - baseScore * (1 - timeWeight) * alpha`. Defaults to store `alpha` (0.05). */
+  alpha?: number;
+  /** Optional reusable decay curve override for recency ranking or soft-range/anchor distance fade. */
+  curve?: DecayCurveInput;
   threshold?: number;
   rerank?: boolean;
   showExpired?: boolean;
@@ -375,6 +385,12 @@ export interface DecayMemoryDependencies {
   overfetchFactor?: number;
   maxCandidates?: number;
   defaultQueryHalfLifeDays?: number;
+  /** Optional reusable default decay curve for soft-range and anchor distance queries (mutually exclusive with `defaultQueryHalfLifeDays`). */
+  defaultQueryCurve?: DecayCurveInput;
+  /** Optional custom `CurveRegistry` for resolving `{ kind }` curve specs. */
+  curveRegistry?: CurveRegistry;
+  /** Default decay penalty weight in [0, 1] for `adjustedScore = baseScore - baseScore * (1 - timeWeight) * alpha`. Defaults to 0.05 (5%). */
+  alpha?: number;
   qdrantReader?: QdrantReader;
   scopeSweepPolicy?: ScopeSweepPolicy | ScopeSweepPolicyResolver;
   archiveSink?: ArchiveSink;

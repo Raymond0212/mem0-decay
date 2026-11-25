@@ -11,6 +11,7 @@ import {
   type SweepOptions,
   type SweepReport,
 } from "./contracts.js";
+import { resolveDecayCurve } from "./curves.js";
 import {
   DECAY_METADATA_KEYS,
   assertNoReservedMetadataKeys,
@@ -19,11 +20,13 @@ import {
 import { DEFAULT_POLICY_IDS, defaultPolicyRegistry } from "./policy.js";
 import { createInProcessWriteCoordinator } from "./router.js";
 import {
+  DEFAULT_ALPHA,
   DEFAULT_MAX_CANDIDATES,
   DEFAULT_OVERFETCH_FACTOR,
   DEFAULT_QUERY_HALF_LIFE_DAYS,
   assertScopeMatchesTenantBinding,
   executeDecaySearch,
+  validateAlpha,
 } from "./search.js";
 import { executeSweep } from "./sweep.js";
 
@@ -36,6 +39,14 @@ export function createDecayMemory(dependencies: DecayMemoryDependencies): DecayM
   }
   if (!dependencies.memory || typeof dependencies.memory !== "object") {
     throw new TypeError("memory instance is required");
+  }
+  if (
+    dependencies.defaultQueryCurve !== undefined &&
+    dependencies.defaultQueryHalfLifeDays !== undefined
+  ) {
+    throw new RangeError(
+      "Provide either defaultQueryCurve or defaultQueryHalfLifeDays, not both",
+    );
   }
 
   const storeId = dependencies.storeId.trim();
@@ -50,6 +61,12 @@ export function createDecayMemory(dependencies: DecayMemoryDependencies): DecayM
   const maxCandidates = dependencies.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
   const defaultQueryHalfLifeDays =
     dependencies.defaultQueryHalfLifeDays ?? DEFAULT_QUERY_HALF_LIFE_DAYS;
+  const curveRegistry = dependencies.curveRegistry;
+  const defaultQueryCurve =
+    dependencies.defaultQueryCurve !== undefined
+      ? resolveDecayCurve(dependencies.defaultQueryCurve, curveRegistry)
+      : undefined;
+  const alpha = validateAlpha(dependencies.alpha ?? DEFAULT_ALPHA);
 
   if (!Number.isInteger(overfetchFactor) || overfetchFactor <= 0) {
     throw new RangeError(`overfetchFactor must be a positive integer, received: ${String(overfetchFactor)}`);
@@ -169,6 +186,9 @@ export function createDecayMemory(dependencies: DecayMemoryDependencies): DecayM
           overfetchFactor,
           maxCandidates,
           defaultQueryHalfLifeDays,
+          defaultQueryCurve,
+          curveRegistry,
+          alpha,
           accessSidecar: dependencies.accessSidecar,
         },
         query,

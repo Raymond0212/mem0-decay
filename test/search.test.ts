@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DECAY_METADATA_KEYS,
+  DEFAULT_ALPHA,
   DEFAULT_POLICY_IDS,
   MS_PER_DAY,
+  createCurveRegistry,
   createDecayMemory,
+  createDecayRouter,
   createPolicyRegistry,
+  createQdrantReader,
   decayCurves,
   preserveEventSpanMetadata,
 } from "../src/index.js";
@@ -67,7 +71,9 @@ describe("add() and time-aware search()", () => {
     expect(preserved.category).toBe("ops-edited");
   });
 
-  it("ranks 30-day soft record (0.80 -> ~0.52) behind fresh record (0.65) and preserves baseScore", async () => {
+  it("ranks 30-day soft record (0.80 -> 0.786 at default 5% alpha) behind fresh record (0.79), supports adjustable alpha, and preserves baseScore", async () => {
+    expect(DEFAULT_ALPHA).toBe(0.05);
+
     const fake = new FakeMem0QdrantStore();
     fake.seed({
       id: "old-soft",
@@ -86,7 +92,7 @@ describe("add() and time-aware search()", () => {
     fake.seed({
       id: "fresh-soft",
       memory: "Fresh preference",
-      baseScore: 0.65,
+      baseScore: 0.79,
       payload: {
         user_id: "alice",
         [DECAY_METADATA_KEYS.tenant]: "acme",
@@ -104,13 +110,16 @@ describe("add() and time-aware search()", () => {
       nowMs: () => NOW,
     });
 
+    // Default alpha = 0.05: old-soft has timeWeight = 0.65 -> 0.8 - 0.8 * (1 - 0.65) * 0.05 = 0.786 < 0.79
     const top2 = await wrapper.search("preference", { scope: SCOPE, topK: 2 });
     expect(top2.mode).toBe("recency");
     expect(top2.results.map((r) => r.id)).toEqual(["fresh-soft", "old-soft"]);
-    expect(top2.results[0]!.baseScore).toBe(0.65);
-    expect(top2.results[0]!.adjustedScore).toBeCloseTo(0.65, 12);
+    expect(top2.results[0]!.baseScore).toBe(0.79);
+    expect(top2.results[0]!.timeWeight).toBe(1);
+    expect(top2.results[0]!.adjustedScore).toBeCloseTo(0.79, 12);
     expect(top2.results[1]!.baseScore).toBe(0.8);
-    expect(top2.results[1]!.adjustedScore).toBeCloseTo(0.52, 12);
+    expect(top2.results[1]!.timeWeight).toBeCloseTo(0.65, 12);
+    expect(top2.results[1]!.adjustedScore).toBeCloseTo(0.786, 12);
     expect(top2.results[1]!.tier).toBe(0);
     expect(top2.results[1]!.timeSpan).toEqual({
       start: NOW - 30 * DAY,
@@ -119,13 +128,38 @@ describe("add() and time-aware search()", () => {
 
     const top1 = await wrapper.search("preference", { scope: SCOPE, topK: 1 });
     expect(top1.results.map((r) => r.id)).toEqual(["fresh-soft"]);
+
+    // Per-query adjustable alpha: alpha = 0 disables decay penalty; alpha = 1 applies full (1 - timeWeight)
+    const noPenalty = await wrapper.search("preference", { scope: SCOPE, topK: 2, alpha: 0 });
+    expect(noPenalty.results.map((r) => r.id)).toEqual(["old-soft", "fresh-soft"]);
+    expect(noPenalty.results[0]!.adjustedScore).toBeCloseTo(0.8, 12);
+
+    const fullPenalty = await wrapper.search("preference", { scope: SCOPE, topK: 2, alpha: 1 });
+    expect(fullPenalty.results.find((r) => r.id === "old-soft")!.adjustedScore).toBeCloseTo(0.52, 12);
+
+    // Store-level adjustable alpha
+    const customAlphaWrapper = createDecayMemory({
+      storeId: "store-1",
+      memory: fake.asMem0(),
+      nowMs: () => NOW,
+      alpha: 0.2,
+    });
+    const storeCustomRes = await customAlphaWrapper.search("preference", { scope: SCOPE, topK: 2 });
+    // 0.8 - 0.8 * 0.35 * 0.2 = 0.744
+    expect(storeCustomRes.results.find((r) => r.id === "old-soft")!.adjustedScore).toBeCloseTo(0.744, 12);
   });
 
-  it("applies the same multiplication formula for exponential, sigmoid, and custom curves", async () => {
+  it("applies the same weighted alpha formula for exponential, 5-parameter sigmoid, and custom curves", async () => {
     const registry = createPolicyRegistry([
       {
         id: "sig@v1",
-        curve: decayCurves.sigmoid({ activeDays: 23, fadeDays: 14 }),
+        curve: decayCurves.sigmoid({
+          lower: 0.1,
+          upper: 0.9,
+          midpoint: 30,
+          slope: 0.2,
+          asymmetry: 2,
+        }),
         floor: 0.2,
       },
       {
@@ -175,10 +209,13 @@ describe("add() and time-aware search()", () => {
     const res = await wrapper.search("memory", { scope: SCOPE, topK: 5 });
     const sig = res.results.find((r) => r.id === "rec-sig")!;
     const lin = res.results.find((r) => r.id === "rec-linear")!;
-    // Sigmoid at day 30 has strength = 0.5 -> timeWeight = 0.2 + 0.8 * 0.5 = 0.6 -> 0.8 * 0.6 = 0.48
-    expect(sig.adjustedScore).toBeCloseTo(0.48, 12);
-    // Linear at day 50 has strength = 0.5 -> timeWeight = 0.1 + 0.9 * 0.5 = 0.55 -> 0.8 * 0.55 = 0.44
-    expect(lin.adjustedScore).toBeCloseTo(0.44, 12);
+    // 5-param sigmoid at day 30: strength = 0.1 + 0.8 * 0.5^2 = 0.3 -> timeWeight = 0.2 + 0.8 * 0.3 = 0.44
+    // adjustedScore = 0.8 - 0.8 * (1 - 0.44) * 0.05 = 0.7776
+    expect(sig.timeWeight).toBeCloseTo(0.44, 12);
+    expect(sig.adjustedScore).toBeCloseTo(0.7776, 12);
+    // Linear at day 50 has strength = 0.5 -> timeWeight = 0.1 + 0.9 * 0.5 = 0.55 -> 0.8 - 0.8 * 0.45 * 0.05 = 0.782
+    expect(lin.timeWeight).toBeCloseTo(0.55, 12);
+    expect(lin.adjustedScore).toBeCloseTo(0.782, 12);
   });
 
   it("handles strict range pre-filtering, straddling summary exclusion, soft range, anchor, and backfills", async () => {
@@ -276,9 +313,9 @@ describe("add() and time-aware search()", () => {
       soft1.results.map((r) => [r.id, r.adjustedScore]),
     );
     const pinnedInSoft = soft1.results.find((r) => r.id === "pinned-outside")!;
-    // 2025-03-30T00:00Z is exactly 14 days after 2025-03-16T00:00Z -> weight = 0.5 -> 0.9 * 0.5 = 0.45
+    // 2025-03-30T00:00Z is exactly 14 days after 2025-03-16T00:00Z -> weight = 0.5 -> 0.9 - 0.9 * 0.5 * 0.05 = 0.8775
     expect(pinnedInSoft.timeWeight).toBeCloseTo(0.5, 12);
-    expect(pinnedInSoft.adjustedScore).toBeCloseTo(0.45, 12);
+    expect(pinnedInSoft.adjustedScore).toBeCloseTo(0.8775, 12);
 
     // 3. Anchor query also ignores today's date and weights pinned records symmetrically
     const anchor1 = await wrapper.search("notes", {
@@ -328,12 +365,25 @@ describe("add() and time-aware search()", () => {
     const dated = res.results.find((r) => r.id === "legacy-dated")!;
     expect(undated.timeWeight).toBe(1);
     expect(undated.adjustedScore).toBe(0.6);
-    expect(dated.adjustedScore).toBeCloseTo(0.52, 12);
+    expect(dated.adjustedScore).toBeCloseTo(0.786, 12);
 
     // Validation errors
     await expect(
       wrapper.search("x", { scope: SCOPE, topK: 21 }),
     ).rejects.toThrow(RangeError);
+    await expect(
+      wrapper.search("x", { scope: SCOPE, alpha: -0.01 }),
+    ).rejects.toThrow(RangeError);
+    await expect(
+      wrapper.search("x", { scope: SCOPE, alpha: 1.01 }),
+    ).rejects.toThrow(RangeError);
+    expect(() =>
+      createDecayMemory({
+        storeId: "store-bad-alpha",
+        memory: fake.asMem0(),
+        alpha: Number.NaN,
+      }),
+    ).toThrow(RangeError);
     await expect(
       wrapper.search("x", {
         scope: SCOPE,
@@ -361,5 +411,129 @@ describe("add() and time-aware search()", () => {
     expect(tzCall.config.filters?.[DECAY_METADATA_KEYS.timeEnd]).toEqual({
       lt: Date.UTC(2026, 0, 15, 15, 0, 0),
     });
+  });
+
+  it("reuses a single created curve everywhere: policy, sweep, store defaultQueryCurve, recency override, soft range, anchor, and router", async () => {
+    // Create one 5-parameter sigmoid curve once
+    const sharedCurve = decayCurves.sigmoid({
+      lower: 0.1,
+      upper: 0.9,
+      midpoint: 20,
+      slope: 0.3,
+      asymmetry: 2,
+    });
+
+    const policyRegistry = createPolicyRegistry([
+      {
+        id: "shared_sig@v1",
+        curve: sharedCurve,
+        floor: 0,
+        minStrength: 0.35,
+        sweepEligible: true,
+      },
+    ]);
+
+    const fake = new FakeMem0QdrantStore();
+    fake.seed({
+      id: "m-20d",
+      memory: "20-day note",
+      baseScore: 0.8,
+      payload: {
+        user_id: "alice",
+        [DECAY_METADATA_KEYS.tenant]: "acme",
+        [DECAY_METADATA_KEYS.timeStart]: NOW - 20 * DAY,
+        [DECAY_METADATA_KEYS.timeEnd]: NOW - 20 * DAY,
+        [DECAY_METADATA_KEYS.ingestedAt]: NOW - 20 * DAY,
+        [DECAY_METADATA_KEYS.policy]: "shared_sig@v1",
+        [DECAY_METADATA_KEYS.tier]: 0,
+      },
+    });
+
+    const wrapper = createDecayMemory({
+      storeId: "store-universal",
+      memory: fake.asMem0(),
+      nowMs: () => NOW,
+      policyResolver: policyRegistry,
+      defaultQueryCurve: sharedCurve,
+      qdrantReader: createQdrantReader({
+        client: fake.asQdrantClient(),
+        collectionName: "memories",
+      }),
+      scopeSweepPolicy: { action: "delete" },
+    });
+
+    const expectedStrengthAt20 = sharedCurve(20); // 0.3
+
+    // 1. Policy recency ranking uses sharedCurve
+    const recency = await wrapper.search("note", { scope: SCOPE, topK: 5 });
+    expect(recency.results[0]!.timeWeight).toBeCloseTo(expectedStrengthAt20, 12);
+
+    // 2. Per-query curve override in recency mode
+    const steeperCurve = decayCurves.exponential(10); // at 20d -> 0.25
+    const overridden = await wrapper.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      curve: steeperCurve,
+    });
+    expect(overridden.results[0]!.timeWeight).toBeCloseTo(0.25, 12);
+
+    // 3. Store defaultQueryCurve used automatically in anchor mode (20d from NOW)
+    const anchorDefault = await wrapper.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      anchor: { around: NOW },
+    });
+    expect(anchorDefault.results[0]!.timeWeight).toBeCloseTo(expectedStrengthAt20, 12);
+
+    // 3b. Exact anchor match (distMs === 0) MUST keep timeWeight = 1 even when sharedCurve(0) < 1
+    expect(sharedCurve(0)).toBeLessThan(1);
+    const exactAnchor = await wrapper.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      anchor: { around: NOW - 20 * DAY, curve: sharedCurve },
+    });
+    expect(exactAnchor.results[0]!.timeWeight).toBe(1);
+
+    // 4. Explicit curve on soft_range and anchor
+    const softRange = await wrapper.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      range: { from: NOW, to: NOW + DAY, strict: false, curve: steeperCurve },
+    });
+    expect(softRange.results[0]!.timeWeight).toBeCloseTo(0.25, 12);
+
+    // 5. Router defaultQueryCurve and per-query curve fan-out (including store-level curveRegistry specs)
+    const storeCurveRegistry = createCurveRegistry().register("half_at_any_age", () => () => 0.5);
+    const storeWithRegistry = createDecayMemory({
+      storeId: "store-with-registry",
+      memory: fake.asMem0(),
+      nowMs: () => NOW,
+      policyResolver: policyRegistry,
+      curveRegistry: storeCurveRegistry,
+    });
+    const router = createDecayRouter({
+      nowMs: () => NOW,
+      defaultQueryCurve: steeperCurve,
+    });
+    router.registerStore(wrapper, { activeWriter: true });
+    const routerAnchor = await router.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      anchor: { around: NOW },
+    });
+    expect(routerAnchor.results[0]!.timeWeight).toBeCloseTo(0.25, 12);
+
+    const routerForRegistryStore = createDecayRouter({ nowMs: () => NOW });
+    routerForRegistryStore.registerStore(storeWithRegistry, { activeWriter: true });
+    const routerSpecSearch = await routerForRegistryStore.search("note", {
+      scope: SCOPE,
+      topK: 5,
+      curve: { kind: "half_at_any_age" },
+    });
+    expect(routerSpecSearch.results[0]!.timeWeight).toBeCloseTo(0.5, 12);
+
+    // 6. Sweep eligibility uses the exact same sharedCurve (0.3 < minStrength 0.35 -> eligible)
+    const drySweep = await wrapper.sweep({ scope: SCOPE, dryRun: true });
+    expect(drySweep.eligible).toBe(1);
   });
 });

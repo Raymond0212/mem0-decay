@@ -1,9 +1,12 @@
 import type { DecayPolicyDefinition, PolicyResolver } from "./contracts.js";
 import {
+  DEFAULT_HALF_LIFE_DAYS,
   DEFAULT_MIN_STRENGTH,
-  createDecayCriterion,
   decayCurves,
+  resolveDecayCurve,
+  type CurveRegistry,
   type DecayCurve,
+  type DecayCurveInput,
 } from "./curves.js";
 
 export const MS_PER_HOUR = 60 * 60 * 1000;
@@ -22,7 +25,7 @@ export interface PolicyRegistrationInput {
   aliases?: string[];
   floor?: number;
   halfLifeDays?: number;
-  curve?: DecayCurve;
+  curve?: DecayCurveInput;
   minStrength?: number;
   fullRecencyWeight?: boolean;
   exemptFromSweep?: boolean;
@@ -33,11 +36,18 @@ export interface PolicyRegistrationInput {
   retentionCompatibilityKey?: string;
 }
 
-export function definePolicy(input: PolicyRegistrationInput): DecayPolicyDefinition {
+export function definePolicy(
+  input: PolicyRegistrationInput,
+  options: { curveRegistry?: CurveRegistry } = {},
+): DecayPolicyDefinition {
   if (typeof input.id !== "string" || input.id.trim() === "") {
     throw new RangeError("Policy id must be a non-empty string");
   }
   const id = input.id.trim();
+  if (input.curve !== undefined && input.halfLifeDays !== undefined) {
+    throw new RangeError(`Policy '${id}' must provide either curve or halfLifeDays, not both`);
+  }
+
   const floor = input.floor ?? 0;
   if (!Number.isFinite(floor) || floor < 0 || floor > 1) {
     throw new RangeError(`Policy '${id}' floor must be in [0, 1], received: ${String(floor)}`);
@@ -62,20 +72,23 @@ export function definePolicy(input: PolicyRegistrationInput): DecayPolicyDefinit
   const sweepEligible = exemptFromSweep ? false : (input.sweepEligible ?? false);
 
   const curve: DecayCurve =
-    input.curve ??
-    (fullRecencyWeight
-      ? () => 1
-      : decayCurves.exponential({ halfLifeDays: input.halfLifeDays ?? 30 }));
+    input.curve !== undefined
+      ? resolveDecayCurve(input.curve, options.curveRegistry)
+      : fullRecencyWeight
+        ? decayCurves.constant(1)
+        : decayCurves.exponential({ halfLifeDays: input.halfLifeDays ?? DEFAULT_HALF_LIFE_DAYS });
 
-  const criterion = createDecayCriterion({
-    curve,
-    minStrength,
-  });
+  const weightedCurve: DecayCurve = fullRecencyWeight
+    ? decayCurves.constant(1)
+    : curve.withFloor(floor);
+
+  const criterion = curve.toCriterion(minStrength);
 
   return {
     id,
     floor,
     curve,
+    weightedCurve,
     criterion,
     minStrength,
     fullRecencyWeight,
@@ -99,13 +112,13 @@ export interface PolicyRegistry extends PolicyResolver {
 
 export function createPolicyRegistry(
   initialPolicies: PolicyRegistrationInput[] = [],
-  options: { includeDefaults?: boolean } = {},
+  options: { includeDefaults?: boolean; curveRegistry?: CurveRegistry } = {},
 ): PolicyRegistry {
   const byId = new Map<string, DecayPolicyDefinition>();
   const aliases = new Map<string, string>();
 
   const register = (input: PolicyRegistrationInput): DecayPolicyDefinition => {
-    const def = definePolicy(input);
+    const def = definePolicy(input, { curveRegistry: options.curveRegistry });
     byId.set(def.id, def);
     if (input.aliases) {
       for (const alias of input.aliases) {

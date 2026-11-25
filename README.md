@@ -25,12 +25,12 @@ QDRANT_URL=http://127.0.0.1:6333 REQUIRE_LIVE_QDRANT=1 npm run test:integration
 
 | File | Responsibility |
 | --- | --- |
-| `src/curves.ts` | Standalone pure decay curves (`exponential`, reversed `sigmoid`, custom) and callable `createDecayCriterion` / `evaluateDecay` |
+| `src/curves.ts` | Pluggable decay curves built with Strategy, Factory, Decorator (`withFloor`), Adapter (`resolveDecayCurve`), and `CurveRegistry` (`exponential`, 5-parameter generalized logistic `sigmoid`, `constant`, `custom`) |
 | `src/contracts.ts` | Public interfaces (`ResolvedScope`, `Mem0Memory`, `WriteCoordinator`, `QdrantReader`, `AccessStore`, etc.) |
 | `src/policy.ts` | Revisioned policy registry and defaults (`soft@v1`, `ephemeral@v1`, `pinned@v1`, `evergreen@v1`, `tier1_summary@v1`) |
 | `src/metadata.ts` | Reserved `decay_*` metadata namespace protection, timezone-aware date normalization, revision fingerprints, and compaction keys |
 | `src/memory.ts` | `createDecayMemory()` wrapper composing `add()`, `search()`, `sweep()`, and `recordUse()` |
-| `src/search.ts` | No-date recency ranking (`adjustedScore = baseScore × timeWeight`), strict `[from, to)` Qdrant pre-filtering, soft range, and anchor fade |
+| `src/search.ts` | Pluggable-curve recency ranking (`adjustedScore = baseScore - baseScore × (1 - timeWeight) × alpha`, default `alpha = 0.05`), strict `[from, to)` Qdrant pre-filtering, soft range, and anchor fade |
 | `src/qdrant-reader.ts` | Cursor-based scoped `scan()`, `findSummary()`, and `ensureQdrantDecayIndexes()` |
 | `src/sweep.ts` | Scheduled `sweep()` dry-run preview, budget enforcement, durable archive confirmation, and coordinator-rechecked delete |
 | `src/compaction.ts` | Resumable Tier 0 → Tier 1 compaction with embedding clustering, lineage verification, and crash recovery |
