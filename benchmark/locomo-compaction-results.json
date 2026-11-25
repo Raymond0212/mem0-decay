@@ -1,0 +1,120 @@
+{
+  "storage": {
+    "finalTime": "2024-01-12T13:41:00.000Z",
+    "summaries": 1711,
+    "removed": 4958,
+    "sizes": {
+      "control": {
+        "memories": 9719,
+        "memories_allocated_bytes": 119513088,
+        "memories_apparent_bytes": 369848506,
+        "entities": 40221,
+        "entities_allocated_bytes": 326606848,
+        "entities_apparent_bytes": 535041411
+      },
+      "compact": {
+        "memories": 6472,
+        "memories_allocated_bytes": 113639424,
+        "memories_apparent_bytes": 348710782,
+        "entities": 20467,
+        "entities_allocated_bytes": 193437696,
+        "entities_apparent_bytes": 447120469
+      }
+    }
+  },
+  "weekly_checkpoints": 104,
+  "accuracy": {
+    "n": 1540,
+    "control_correct": 1387,
+    "compact_correct": 1367,
+    "control_accuracy_pct": 90.06493506493507,
+    "compact_accuracy_pct": 88.76623376623377,
+    "delta_pp": -1.2987012987012987,
+    "gains": 39,
+    "losses": 59
+  },
+  "accuracy_by_category": {
+    "multi-hop": {
+      "n": 282,
+      "control_correct": 252,
+      "compact_correct": 248,
+      "control_accuracy_pct": 89.36170212765957,
+      "compact_accuracy_pct": 87.94326241134752,
+      "delta_pp": -1.4184397163120568,
+      "gains": 10,
+      "losses": 14
+    },
+    "open-domain": {
+      "n": 96,
+      "control_correct": 71,
+      "compact_correct": 63,
+      "control_accuracy_pct": 73.95833333333333,
+      "compact_accuracy_pct": 65.625,
+      "delta_pp": -8.333333333333334,
+      "gains": 1,
+      "losses": 9
+    },
+    "single-hop": {
+      "n": 841,
+      "control_correct": 780,
+      "compact_correct": 771,
+      "control_accuracy_pct": 92.74673008323424,
+      "compact_accuracy_pct": 91.67657550535077,
+      "delta_pp": -1.070154577883472,
+      "gains": 18,
+      "losses": 27
+    },
+    "temporal": {
+      "n": 321,
+      "control_correct": 284,
+      "compact_correct": 285,
+      "control_accuracy_pct": 88.47352024922118,
+      "compact_accuracy_pct": 88.78504672897196,
+      "delta_pp": 0.3115264797507788,
+      "gains": 10,
+      "losses": 9
+    }
+  },
+  "paired_conversation_bootstrap_95_ci_pp": [
+    -2.3669257571696596,
+    -0.14254660196883648
+  ],
+  "retrieval_cached": {
+    "control": {
+      "p50_ms": 116.06802350000362,
+      "p95_ms": 211.5019878500374
+    },
+    "compact": {
+      "p50_ms": 106.93311199994059,
+      "p95_ms": 196.83589815000886
+    },
+    "pairs": 1540,
+    "paired_median_difference_ms": -12.148589000018546
+  },
+  "retrieval_fresh_embedding": {
+    "control": {
+      "p50_ms": 592.621326500026,
+      "p95_ms": 736.3510649000178
+    },
+    "compact": {
+      "p50_ms": 571.3805695000337,
+      "p95_ms": 689.6595433500421
+    },
+    "pairs": 50,
+    "paired_median_difference_ms": -11.877633500029333
+  },
+  "contexts": {
+    "compacted_summary_in_context": 1479,
+    "same_memory_set": 2
+  },
+  "openai_estimated_usd_by_phase": {
+    "compression": 0.10106788000000133,
+    "embedding_warmup": 0.0005528800000000019,
+    "timed_cold_search": 3.988000000000003e-05,
+    "pilot": 0.005192550000000005,
+    "answer_and_judge": 41.909194999999855
+  },
+  "openai_estimated_total_usd": 42.01604818999986,
+  "openai_replay_and_embedding_calls": 8649,
+  "openai_answer_and_judge_calls": 4531
+}

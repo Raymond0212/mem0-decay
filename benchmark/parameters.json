@@ -1,0 +1,102 @@
+{
+  "codebase_commit": "8c9ce8330859df5043329916a409b31ab0be66d1",
+  "dataset": {
+    "name": "LoCoMo-10",
+    "source_repository": "https://github.com/snap-research/locomo",
+    "source_commit": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+    "source_path": "data/locomo10.json",
+    "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
+    "conversations": 10,
+    "dialogue_turns": 5882,
+    "question_categories": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "scored_questions": 1540
+  },
+  "public_harness": {
+    "repository": "https://github.com/mem0ai/memory-benchmarks",
+    "commit": "4b61c5d31b9c668a12b4f5e78064248a02c82d2b",
+    "ingestion_chunk_turns": 1,
+    "judge_evidence": false
+  },
+  "runtime": {
+    "node_major": 24,
+    "python_minor": "3.12",
+    "mem0_oss_js": "3.3.1",
+    "qdrant_server": "1.20.0",
+    "qdrant_js_client": "1.17.0",
+    "retrieval_signals": [
+      "dense",
+      "BM25",
+      "entity"
+    ]
+  },
+  "models": {
+    "fact_extraction": "gpt-4o-mini",
+    "embeddings": "text-embedding-3-small",
+    "embedding_dimensions": 1536,
+    "compaction_summaries": "gpt-4o-mini-2024-07-18",
+    "compaction_summary_temperature": 0,
+    "compaction_summary_max_output_tokens": 512,
+    "answerer": "gpt-4o-2024-08-06",
+    "judge": "gpt-4o-2024-08-06",
+    "answerer_and_judge_temperature": 0
+  },
+  "ranking_run": {
+    "query_clock": "Final session timestamp of each conversation",
+    "candidate_limit": 200,
+    "scored_cutoffs": [
+      50,
+      200
+    ],
+    "control": "Native Mem0 ranking from the same candidate pool",
+    "policy": "soft@v1",
+    "curve": "exponential",
+    "half_life_days": 30,
+    "search_floor": 0.3,
+    "sweeps_enabled": false
+  },
+  "candidate_replay": {
+    "query_clock": "Final session timestamp of each conversation",
+    "cutoff": 50,
+    "questions_with_annotated_turns": 1531,
+    "metric": "At least one annotated supporting turn represented in the selected memories",
+    "wrapper_timing_measured_passes": 9,
+    "wrapper_timing_questions_per_pass": 1540
+  },
+  "compaction_run": {
+    "query_clock_utc": "2024-01-12T13:41:00Z",
+    "cutoff": 50,
+    "candidate_limit": 200,
+    "search_curve": "exponential",
+    "half_life_days": 30,
+    "search_floor": 0.95,
+    "summary_half_life_days": 30,
+    "summary_search_floor": 0.95,
+    "per_scope_control_action": "none",
+    "per_scope_compacted_action": "compact",
+    "checkpoint_interval_days": 7,
+    "total_checkpoints_including_final": 104,
+    "sweep_min_strength_exclusive": 0.05,
+    "source_ingestion_grace_hours": 0,
+    "time_bucket_days": 7,
+    "minimum_pairwise_cosine_similarity": 0.75,
+    "minimum_sources_per_group": 2,
+    "maximum_sources_per_group": 8,
+    "maximum_mutations_per_sweep": 3000,
+    "source_tier": 0,
+    "target_tier": 1,
+    "target_policy": "tier1_summary@v1",
+    "cached_embedding_latency_pairs": 1540,
+    "fresh_embedding_latency_pairs": 50,
+    "latency_excludes": [
+      "compression",
+      "answer generation",
+      "judging"
+    ],
+    "storage_measurement": "Allocated and apparent bytes for both Qdrant collection directories after replay"
+  }
+}
