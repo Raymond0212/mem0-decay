@@ -1,38 +1,84 @@
 # `mem0-decay`
 
-Time-aware ranking and scoped lifecycle management wrapper for **Mem0 OSS** and **Qdrant**.
+Time-aware ranking and scoped lifecycle management for Mem0 OSS and Qdrant. The Python package wraps Mem0's native retrieval and uses the existing `decay_*` Qdrant payload format.
 
-- **Tested Mem0 OSS compatibility target:** `mem0ai@3.3.1`
-- **Vector store target:** Qdrant (`@qdrant/js-client-rest` `>=1.13.0 <1.19.0`; `1.18.x` tested with `mem0ai@3.3.1` because `@qdrant/js-client-rest@1.19.0` removed `QdrantClient.search()`)
-- **Zero runtime dependencies** in the core library; curve helpers (`mem0-decay/curves`) work standalone without initializing Mem0 or Qdrant.
-
-## Scripts
+## Install
 
 ```bash
-npm run typecheck         # Type-check src/ and test/
-npm run build             # Emit dist/ ESM + .d.ts declarations
-npm test                  # Run unit test suite (independent of live Qdrant)
-npm run test:integration  # Run live Qdrant + Mem0 3.3.1 integration fixture
+python -m pip install '.[oss]'
 ```
 
-For the live integration suite, start a local Qdrant container (e.g. `docker run -p 6333:6333 qdrant/qdrant`) and run:
+The core package has no third-party dependencies. Install the `oss` extra to use the Python Mem0 and Qdrant SDKs. The integration tests exercise Mem0 `2.2.1` and Qdrant client `1.20.0`. Python 3.11 or later is required.
+
+## Add and search
+
+Configure Mem0 with the model and Qdrant collection for your deployment. Pass either `mem0.AsyncMemory` or `mem0.Memory` to the async wrapper.
+
+```python
+import asyncio
+
+from mem0 import AsyncMemory
+from mem0_decay import DecayMemory, RangeQuery, ResolvedScope, TenantBinding
+
+
+async def main():
+    native = AsyncMemory.from_config({
+        "vector_store": {
+            "provider": "qdrant",
+            "config": {
+                "collection_name": "workspace_memory",
+                "url": "http://127.0.0.1:6333",
+            },
+        },
+    })
+    binding = TenantBinding("collection", tenant="workspace")
+    memory = DecayMemory("workspace_memory", native, tenant_binding=binding)
+    scope = ResolvedScope("workspace", user_id="alice")
+
+    await memory.add(
+        "Alice started a new job in January.",
+        scope=scope,
+        event_time="2024-01-17",
+        infer=False,
+    )
+
+    result = await memory.search(
+        "When did Alice start her job?",
+        scope=scope,
+        range=RangeQuery("2024-01-01", "2024-01-31"),
+    )
+    for item in result.results:
+        print(item.memory, item.adjusted_score)
+
+
+asyncio.run(main())
+```
+
+Mem0 retrieves candidates with the authorized scope and optional filters. In recency mode, the wrapper reranks them using `base_score - base_score * (1 - time_weight) * alpha`. The default `alpha` is `0.05`. Policy floors bound `time_weight` and the sweep threshold uses raw curve strength. Range and anchor queries accept custom curves and IANA time zones. A date-only range end includes the entire local day.
+
+## Sweep and compact
+
+Use a `QdrantReader` pointed at the same collection and configured with the same tenant binding. The reader accepts both Python Qdrant clients and supports named dense vectors via `dense_vector_name`. Provision filter indexes with `await ensure_qdrant_decay_indexes(client, collection_name)` when the collection is created.
+
+- Call `await memory.sweep(scope=scope)` to preview eligible actions. Pass `dry_run=False` to apply them and use `max_mutations_per_run` to cap writes and deletions.
+- Configure `ScopeSweepPolicy("delete")`, `ScopeSweepPolicy("archive")`, or `ScopeSweepPolicy("compact")`. The default action is `"none"`. The `soft@v1` policy is ranking-only by default. `ephemeral@v1` can become eligible after its ingestion grace period.
+- For archive, supply an `archive_sink` callback that durably stores the record before returning. It can return an acknowledgment with `confirmed=True` and the supplied `key`.
+- For compaction, supply a `summarizer` callback that accepts the group and returns its summary text. The sweep writes and verifies lineage on a Tier 1 summary before retiring Tier 0 sources. The default in-memory work store supports retries within one process. Supply a durable `CompactionWorkStore` and a shared write coordinator for recovery across process restarts or concurrent workers.
+
+`DecayRouter` provides scope authorization, a shared writer, and multi-store search using a common reference clock. `AccessSidecar` optionally lets explicit, idempotent `record_use()` events reduce a memory's effective ranking age.
+
+## Migrate a caller
+
+Use `create_decay_memory()` or `DecayMemory` with snake_case keyword arguments and a `ResolvedScope`. Query operations return Python dataclasses. The Mem0 SDK response from `add()` remains a dictionary. The Python Mem0 SDK accepts search filters, while add scoping uses `user_id`, `agent_id`, and `run_id`. Use a collection per tenant or tenant-unique Mem0 identities for inferred writes, since Mem0 itself scopes extraction by those IDs. Metadata binding can additionally scope wrapper searches and sweeps.
+
+The port keeps existing decay metadata, policy IDs, and revision and compaction keys. The Mem0 SDK owns the underlying vector and entity indexes. Point the Python wrapper at a collection supported by your Python Mem0 configuration.
+
+## Tests and benchmarks
 
 ```bash
-QDRANT_URL=http://127.0.0.1:6333 REQUIRE_LIVE_QDRANT=1 npm run test:integration
+python -m unittest discover -s tests -v
 ```
 
-## Module layout
+With the `oss` extra installed, this also exercises Mem0 with local Qdrant and deterministic embeddings. That fixture requires no OpenAI calls.
 
-| File | Responsibility |
-| --- | --- |
-| `src/curves.ts` | Pluggable decay curves built with Strategy, Factory, Decorator (`withFloor`), Adapter (`resolveDecayCurve`), and `CurveRegistry` (`exponential`, 5-parameter generalized logistic `sigmoid`, `constant`, `custom`) |
-| `src/contracts.ts` | Public interfaces (`ResolvedScope`, `Mem0Memory`, `WriteCoordinator`, `QdrantReader`, `AccessStore`, etc.) |
-| `src/policy.ts` | Revisioned policy registry and defaults (`soft@v1`, `ephemeral@v1`, `pinned@v1`, `evergreen@v1`, `tier1_summary@v1`) |
-| `src/metadata.ts` | Reserved `decay_*` metadata namespace protection, timezone-aware date normalization, revision fingerprints, and compaction keys |
-| `src/memory.ts` | `createDecayMemory()` wrapper composing `add()`, `search()`, `sweep()`, and `recordUse()` |
-| `src/search.ts` | Pluggable-curve recency ranking (`adjustedScore = baseScore - baseScore × (1 - timeWeight) × alpha`, default `alpha = 0.05`), strict `[from, to)` Qdrant pre-filtering, soft range, and anchor fade |
-| `src/qdrant-reader.ts` | Cursor-based scoped `scan()`, `findSummary()`, and `ensureQdrantDecayIndexes()` |
-| `src/sweep.ts` | Scheduled `sweep()` dry-run preview, budget enforcement, durable archive confirmation, and coordinator-rechecked delete |
-| `src/compaction.ts` | Resumable Tier 0 → Tier 1 compaction with embedding clustering, lineage verification, and crash recovery |
-| `src/access-store.ts` | Optional `AccessStore` port, `InMemoryAccessStore`, effective-age reduction, and timeout fallback |
-| `src/router.ts` | `createDecayRouter()` and `createInProcessWriteCoordinator()` enforcing scope authorization, frozen-clock fan-out, and the single-writer boundary |
+The [benchmark submodule](benchmark) contains the historical LoCoMo runs for the TypeScript revision. Those results and reproduction scripts use the historical checkout documented in the benchmark repository.
