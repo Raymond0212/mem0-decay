@@ -1,0 +1,9 @@
+# Overlay for the unmodified benchmark main branch's docker-compose.yml.
+services:
+  mem0:
+    build:
+      context: ${MEM0_DECAY_ROOT:?Set MEM0_DECAY_ROOT to the absolute path of the mem0-decay-py checkout}
+      dockerfile: Dockerfile.option-b
+    environment:
+      HISTORY_DB_PATH: /app/history/history.db
+      MEM0_DECAY_REFERENCE_DATE: ${MEM0_DECAY_REFERENCE_DATE:-}

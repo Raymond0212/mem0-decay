@@ -1,0 +1,6 @@
+*
+!pyproject.toml
+!README.md
+!mem0_decay/
+!mem0_decay/*.py
+mem0_decay/__pycache__/

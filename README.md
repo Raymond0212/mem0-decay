@@ -83,4 +83,37 @@ python -m unittest discover -s tests -v
 
 With the `oss` extra installed, this also exercises Mem0 with local Qdrant and deterministic embeddings. That fixture requires no OpenAI calls.
 
-The [benchmark submodule](https://github.com/Raymond0212/mem0-decay-benchmark/tree/mem0-decay-benchmark-py) uses the Python package when running Option B from this checkout. The historical LoCoMo results and reproduction scripts under `decay/` describe the TypeScript revision.
+## Run LoCoMo with benchmark main's Option B
+
+Option B talks to an OSS server over HTTP. The Compose override in this repository supplies the Python decay server for the `mem0` service. The benchmark's own Compose file supplies Qdrant, the history volume, the health check and port mappings. Use a separate checkout of the benchmark's `main` branch. The commands below can run with that checkout mounted read-only.
+
+Start in the root of `mem0-decay-py`, with `OPENAI_API_KEY` available to Compose and the benchmark process.
+
+```bash
+export MEM0_DECAY_ROOT="$PWD"
+export BENCHMARK_MAIN=/absolute/path/to/mem0-decay-benchmark-main
+export MEM0_DECAY_REFERENCE_DATE=2024-01-12T13:41:00Z
+
+docker compose -p locomo-decay \
+  -f "$BENCHMARK_MAIN/docker-compose.yml" \
+  -f "$MEM0_DECAY_ROOT/compose.option-b.yaml" up -d --build --wait
+curl -fsS http://localhost:8888/health
+```
+
+The health response identifies `mem0-decay`, policy `bounded_30d@v1`, and the reference time in epoch milliseconds. The example uses the last session in LoCoMo-10 as the search clock across all conversations. Omitting the variable selects wall-clock time. The separate Compose project gives this run its own database volumes.
+
+Run the upstream CLI from a writable directory outside both repositories. It writes its dataset cache, logs, checkpoints and results there. Use a fresh directory for a new experiment.
+
+```bash
+python -m pip install -r "$BENCHMARK_MAIN/requirements.txt"
+mkdir -p "$HOME/locomo-decay-run"
+cd "$HOME/locomo-decay-run"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$BENCHMARK_MAIN" \
+  python -m benchmarks.locomo.run --project-name locomo-decay-py \
+    --backend oss --mem0-host http://localhost:8888 --top-k 200 \
+    --top-k-cutoffs 50,200 --answerer-model gpt-4o --judge-model gpt-4o
+```
+
+Each `POST /memories` carries the session timestamp in Unix seconds. On `POST /search`, the server retrieves the requested number of native candidates for that user and applies the 30-day exponential policy with a 0.95 floor and `alpha=1`. It returns the adjusted value as `score` and the event date as `created_at`, the two fields the stock harness uses for ordering and for dates in the answer prompt. The harness handles answering, judging and retrieval timing. This configuration measures search-time decay. A scheduled compaction run requires a separate sweep driver.
+
+The image includes fastembed and the spaCy English model. On first use, fastembed downloads `Qdrant/bm25` from Hugging Face. If that download fails, Mem0 logs a warning and proceeds with BM25 disabled. The CLI command above uses OpenAI for extraction, embeddings, answering and judging.
