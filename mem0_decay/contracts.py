@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Protocol
 
@@ -150,6 +150,9 @@ class DecaySearchItem:
     metadata: dict[str, Any]
     created_at: str | None = None
     updated_at: str | None = None
+    native_result: dict[str, Any] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,6 +20,7 @@ from .compaction import (
     plan_compaction_groups,
     verify_summary_lineage,
 )
+from .compat import Mem0Decay
 from .contracts import (
     AnchorQuery,
     DateInput,
@@ -107,6 +108,7 @@ __all__ = [
     "InMemoryAccessStore",
     "InMemoryCompactionWorkStore",
     "InProcessWriteCoordinator",
+    "Mem0Decay",
     "Mem0Memory",
     "PlannedCompactionGroup",
     "PlannedMutation",

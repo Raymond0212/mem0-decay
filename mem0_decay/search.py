@@ -128,6 +128,7 @@ async def execute_decay_search(
     curve=None,
     threshold=None,
     rerank=None,
+    explain=None,
     show_expired=None,
     filters=None,
     range=None,
@@ -171,7 +172,10 @@ async def execute_decay_search(
     opts = {
         key: value
         for key, value in dict(
-            threshold=threshold, rerank=rerank, show_expired=show_expired
+            threshold=threshold,
+            rerank=rerank,
+            show_expired=show_expired,
+            explain=explain,
         ).items()
         if value is not None
     }
@@ -269,6 +273,7 @@ async def execute_decay_search(
                 metadata,
                 created,
                 item.get("updated_at", item.get("updatedAt")),
+                dict(item),
             )
         )
 

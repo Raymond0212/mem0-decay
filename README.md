@@ -73,6 +73,8 @@ Use `create_decay_memory()` or `DecayMemory` with snake_case keyword arguments a
 
 The port keeps existing decay metadata, policy IDs, and revision and compaction keys. The Mem0 SDK owns the underlying vector and entity indexes. Point the Python wrapper at a collection supported by your Python Mem0 configuration.
 
+For callers that use the Mem0 OSS SDK interface, `Mem0Decay.from_config(config)` exposes async `add()` and `search()` with Mem0 arguments and `{"results": [...]}` responses. Add takes Mem0 identity keywords. Search and listing take identity filters. Search returns the adjusted value in `score` and preserves the upstream relevance in `base_score`. Historical adds can supply Unix seconds via `timestamp`. Search can supply `reference_date` as an ISO timestamp or epoch milliseconds.
+
 ## Tests and benchmarks
 
 ```bash
@@ -81,4 +83,4 @@ python -m unittest discover -s tests -v
 
 With the `oss` extra installed, this also exercises Mem0 with local Qdrant and deterministic embeddings. That fixture requires no OpenAI calls.
 
-The [benchmark submodule](benchmark) contains the historical LoCoMo runs for the TypeScript revision. Those results and reproduction scripts use the historical checkout documented in the benchmark repository.
+The [benchmark submodule](https://github.com/Raymond0212/mem0-decay-benchmark/tree/mem0-decay-benchmark-py) uses the Python package when running Option B from this checkout. The historical LoCoMo results and reproduction scripts under `decay/` describe the TypeScript revision.

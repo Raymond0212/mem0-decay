@@ -125,6 +125,9 @@ class DecayMemory:
         metadata=None,
         infer=True,
         expiration_date=None,
+        prompt=None,
+        memory_type=None,
+        llm=None,
     ):
         scope = validate_scope(scope, self.tenant_binding)
         assert_no_reserved_metadata_keys(metadata)
@@ -166,9 +169,16 @@ class DecayMemory:
             )
         elif policy.default_ttl_ms is not None:
             stamped[EXPIRES_AT] = now + policy.default_ttl_ms
-        extra = (
-            {"expiration_date": expiration_date} if expiration_date is not None else {}
-        )
+        extra = {
+            name: value
+            for name, value in dict(
+                expiration_date=expiration_date,
+                prompt=prompt,
+                memory_type=memory_type,
+                llm=llm,
+            ).items()
+            if value is not None
+        }
         return await self.write_coordinator.run(
             self.store_id,
             lambda: call(
